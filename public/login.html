@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Acceso — StreamLab</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <header id="topbar" class="topbar"></header>
+
+  <div class="layout">
+    <main class="main" style="margin-left:0">
+      <div class="auth-box">
+        <div class="tabs">
+          <button type="button" id="tab-login" class="tab active">Iniciar sesión</button>
+          <button type="button" id="tab-register" class="tab">Registrarse</button>
+        </div>
+
+        <form id="auth-form">
+          <div class="field">
+            <label for="username">Nombre de usuario</label>
+            <input
+              id="username"
+              class="input"
+              type="text"
+              required
+              minlength="3"
+              maxlength="20"
+              pattern="[a-zA-Z0-9_]{3,20}"
+              placeholder="ej. streamer_01"
+              autocomplete="username"
+            >
+          </div>
+
+          <div class="field">
+            <label for="password">Contraseña</label>
+            <input
+              id="password"
+              class="input"
+              type="password"
+              required
+              minlength="6"
+              placeholder="Mínimo 6 caracteres"
+              autocomplete="current-password"
+            >
+          </div>
+
+          <div
+            id="auth-error"
+            style="display:none;color:var(--live);font-size:13px;margin-bottom:12px"
+          ></div>
+
+          <button type="submit" id="submit-btn" class="btn btn-primary" style="width:100%">
+            Iniciar sesión
+          </button>
+        </form>
+      </div>
+    </main>
+  </div>
+
+  <script src="/common.js"></script>
+  <script>
+    let mode = location.hash === '#register' ? 'register' : 'login';
+    const tabLogin = document.getElementById('tab-login');
+    const tabRegister = document.getElementById('tab-register');
+    const submitBtn = document.getElementById('submit-btn');
+    const errorBox = document.getElementById('auth-error');
+
+    function setMode(next) {
+      mode = next;
+      errorBox.style.display = 'none';
+      tabLogin.classList.toggle('active', mode === 'login');
+      tabRegister.classList.toggle('active', mode === 'register');
+      submitBtn.textContent = mode === 'login' ? 'Iniciar sesión' : 'Crear cuenta';
+    }
+
+    tabLogin.addEventListener('click', () => {
+      history.replaceState(null, '', '/login.html');
+      setMode('login');
+    });
+
+    tabRegister.addEventListener('click', () => {
+      history.replaceState(null, '', '/login.html#register');
+      setMode('register');
+    });
+
+    window.addEventListener('hashchange', () => {
+      setMode(location.hash === '#register' ? 'register' : 'login');
+    });
+
+    document.getElementById('auth-form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      errorBox.style.display = 'none';
+      const username = document.getElementById('username').value.trim().toLowerCase();
+      const password = document.getElementById('password').value;
+
+      try {
+        await api(mode === 'login' ? '/api/login' : '/api/register', {
+          method: 'POST',
+          body: { username, password },
+        });
+        location.href = mode === 'register' ? '/dashboard.html' : '/';
+      } catch (err) {
+        errorBox.textContent = err.message;
+        errorBox.style.display = 'block';
+      }
+    });
+
+    (async () => {
+      const user = await renderTopbar();
+      if (user) location.href = '/dashboard.html';
+      setMode(mode);
+    })();
+  </script>
+</body>
+</html>

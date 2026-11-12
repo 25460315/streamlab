@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>StreamLab — Transmisiones en vivo</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <header id="topbar" class="topbar"></header>
+
+  <div class="layout">
+    <aside id="sidebar" class="sidebar"></aside>
+
+    <main class="main">
+      <div class="section-header">
+        <h1 id="page-title" class="section-title">Explorar canales</h1>
+      </div>
+
+      <div id="chips" class="chips"></div>
+      <div id="grid" class="grid"></div>
+    </main>
+  </div>
+
+  <script src="/socket.io/socket.io.js"></script>
+  <script src="/common.js"></script>
+  <script>
+    const params = new URLSearchParams(location.search);
+    let currentCategory = params.get('category') || '';
+    const isFollowingTab =
+      params.get('tab') === 'following' || params.get('following') === '1';
+
+    async function loadCategories() {
+      const box = document.getElementById('chips');
+      if (isFollowingTab) {
+        box.style.display = 'none';
+        return;
+      }
+      box.style.display = 'flex';
+      const cats = await api('/api/categories');
+      const totalLive = cats.reduce((acc, c) => acc + c.live, 0);
+
+      box.innerHTML = [
+        `<button type="button" class="chip ${!currentCategory ? 'active' : ''}" data-cat="">
+          Todo <span class="chip-count">${totalLive}</span>
+        </button>`,
+        ...cats.map(
+          (c) => `
+          <button type="button" class="chip ${currentCategory === c.name ? 'active' : ''}" data-cat="${esc(c.name)}">
+            ${esc(c.name)} <span class="chip-count">${c.live}</span>
+          </button>`
+        ),
+      ].join('');
+
+      box.querySelectorAll('.chip').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          currentCategory = btn.dataset.cat;
+          const url = new URL(location.href);
+          if (currentCategory) url.searchParams.set('category', currentCategory);
+          else url.searchParams.delete('category');
+          history.replaceState(null, '', url);
+          loadAll();
+        });
+      });
+    }
+
+    async function loadChannels() {
+      const grid = document.getElementById('grid');
+      const title = document.getElementById('page-title');
+
+      if (isFollowingTab) {
+        title.textContent = 'Canales que sigues';
+        try {
+          const list = await api('/api/following');
+          grid.innerHTML = list.length
+            ? list.map(cardHTML).join('')
+            : `<div class="empty" style="grid-column:1/-1">Aún no sigues ningún canal.</div>`;
+        } catch (err) {
+          grid.innerHTML = `<div class="empty" style="grid-column:1/-1">Inicia sesión para ver los canales que sigues.</div>`;
+        }
+        return;
+      }
+
+      title.textContent = currentCategory
+        ? `Categoría: ${currentCategory}`
+        : 'Explorar canales';
+
+      const qs = currentCategory
+        ? `?category=${encodeURIComponent(currentCategory)}`
+        : '';
+      const list = await api('/api/channels' + qs);
+      grid.innerHTML = list.length
+        ? list.map(cardHTML).join('')
+        : `<div class="empty" style="grid-column:1/-1">No hay canales en esta categoría todavía.</div>`;
+    }
+
+    async function loadAll() {
+      await Promise.all([
+        loadCategories(),
+        loadChannels(),
+        renderSidebar(),
+      ]);
+    }
+
+    (async () => {
+      await renderTopbar(isFollowingTab ? 'following' : 'explore');
+      await loadAll();
+
+      const socket = io();
+      socket.on('live', () => {
+        loadAll();
+      });
+    })();
+  </script>
+</body>
+</html>

@@ -1,0 +1,295 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Canal — StreamLab</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <header id="topbar" class="topbar"></header>
+
+  <div class="layout">
+    <aside id="sidebar" class="sidebar"></aside>
+
+    <div class="channel-layout">
+      <section class="channel-stage">
+        <div class="player-wrap">
+          <video id="video" controls playsinline autoplay muted></video>
+          <div id="offline-overlay" class="player-offline" style="display:none">
+            <strong>Canal desconectado</strong>
+            <span>Este canal no está transmitiendo en este momento.</span>
+          </div>
+        </div>
+
+        <div id="channel-header" class="channel-header"></div>
+
+        <div class="dashboard-grid" style="margin-top:18px">
+          <div class="panel-card">
+            <h2>Acerca de <span id="about-user"></span></h2>
+            <p id="channel-bio" class="channel-bio"></p>
+          </div>
+
+          <div class="panel-card">
+            <h2>Transmisiones anteriores (VOD)</h2>
+            <div id="vod-list" class="vod-list"></div>
+          </div>
+        </div>
+      </section>
+
+      <aside class="chat-pane">
+        <div class="chat-header">
+          <span>Chat del canal</span>
+          <span id="chat-viewers" class="offline-tag">0 espectadores</span>
+        </div>
+        <div id="chat-messages" class="chat-messages"></div>
+        <form id="chat-form" class="chat-form">
+          <input
+            id="chat-input"
+            class="input"
+            type="text"
+            maxlength="300"
+            placeholder="Envía un mensaje..."
+            autocomplete="off"
+          >
+          <button type="submit" class="btn btn-primary">Enviar</button>
+        </form>
+      </aside>
+    </div>
+  </div>
+
+  <script src="/vendor/hls.js/hls.min.js"></script>
+  <script src="/socket.io/socket.io.js"></script>
+  <script src="/common.js"></script>
+  <script>
+    const channelName = decodeURIComponent(
+      location.pathname.replace(/^\/c\//, '').split('/')[0]
+    ).toLowerCase();
+
+    const video = document.getElementById('video');
+    const offlineOverlay = document.getElementById('offline-overlay');
+    let hls = null;
+    let retryTimer = null;
+    let channelData = null;
+
+    function destroyHls() {
+      clearTimeout(retryTimer);
+      if (hls) {
+        hls.destroy();
+        hls = null;
+      }
+    }
+
+    function playHls(url) {
+      destroyHls();
+      offlineOverlay.style.display = 'none';
+
+      if (window.Hls && Hls.isSupported()) {
+        hls = new Hls({ liveSyncDurationCount: 2 });
+        hls.loadSource(url);
+        hls.attachMedia(video);
+        hls.on(Hls.Events.MANIFEST_PARSED, () => {
+          video.play().catch(() => {});
+        });
+        hls.on(Hls.Events.ERROR, (_ev, data) => {
+          if (data.fatal) {
+            retryTimer = setTimeout(() => {
+              if (channelData?.is_live) playHls(url);
+            }, 2500);
+          }
+        });
+      } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
+        video.src = url;
+        video.play().catch(() => {});
+      }
+    }
+
+    function playVod(url, name) {
+      destroyHls();
+      offlineOverlay.style.display = 'none';
+      video.src = url;
+      video.muted = false;
+      video.play().catch(() => {});
+      toast(`Reproduciendo VOD: ${name}`);
+    }
+
+    function renderChannel(c) {
+      channelData = c;
+      document.title = `${c.username} — StreamLab`;
+      document.getElementById('about-user').textContent = c.username;
+      document.getElementById('channel-bio').textContent =
+        c.bio || 'Este canal aún no ha agregado una biografía.';
+
+      const isSelf =
+        window.currentUser && window.currentUser.username === c.username;
+
+      document.getElementById('channel-header').innerHTML = `
+        <div class="channel-ident">
+          ${avatar(c.username, 'avatar-lg')}
+          <div>
+            <div id="ch-title" class="channel-title">${esc(c.title)}</div>
+            <div class="channel-sub">
+              <strong style="color:var(--text)">${esc(c.username)}</strong>
+              <span id="ch-cat" class="card-cat" style="margin-top:0">${esc(c.category)}</span>
+              <span id="ch-status">
+                ${
+                  c.is_live
+                    ? `<span class="badge badge-live" style="position:static">EN VIVO</span>`
+                    : `<span class="badge badge-offline" style="position:static">OFFLINE</span>`
+                }
+              </span>
+              <span><strong id="ch-viewers">${c.viewers}</strong> espectadores</span>
+              <span><strong id="ch-followers">${c.followers}</strong> seguidores</span>
+            </div>
+          </div>
+        </div>
+        <div class="channel-actions">
+          ${
+            !isSelf
+              ? `<button type="button" id="btn-follow" class="btn ${c.following ? '' : 'btn-primary'}">
+                   ${c.following ? 'Siguiendo' : 'Seguir'}
+                 </button>`
+              : `<a href="/dashboard.html" class="btn">Editar canal</a>`
+          }
+        </div>
+      `;
+
+      document.getElementById('chat-viewers').textContent = `${c.viewers} espectadores`;
+
+      const followBtn = document.getElementById('btn-follow');
+      if (followBtn) {
+        followBtn.addEventListener('click', async () => {
+          if (!window.currentUser) {
+            location.href = '/login.html';
+            return;
+          }
+          try {
+            const r = await api(`/api/channels/${encodeURIComponent(c.username)}/follow`, {
+              method: 'POST',
+            });
+            c.following = r.following;
+            c.followers = r.followers;
+            followBtn.textContent = r.following ? 'Siguiendo' : 'Seguir';
+            followBtn.className = 'btn ' + (r.following ? '' : 'btn-primary');
+            document.getElementById('ch-followers').textContent = r.followers;
+          } catch (err) {
+            toast(err.message, true);
+          }
+        });
+      }
+
+      const vodBox = document.getElementById('vod-list');
+      if (!c.vods || !c.vods.length) {
+        vodBox.innerHTML = `<div class="offline-tag">No hay grabaciones disponibles.</div>`;
+      } else {
+        vodBox.innerHTML = c.vods
+          .map(
+            (v) => `
+          <div class="vod-item">
+            <div>
+              <div style="font-weight:600">${esc(v.name)}</div>
+              <div class="offline-tag">${v.size_mb} MB</div>
+            </div>
+            <button type="button" class="btn btn-sm btn-primary" data-vod="${esc(v.url)}" data-name="${esc(v.name)}">
+              Reproducir
+            </button>
+          </div>`
+          )
+          .join('');
+
+        vodBox.querySelectorAll('[data-vod]').forEach((btn) => {
+          btn.addEventListener('click', () =>
+            playVod(btn.dataset.vod, btn.dataset.name)
+          );
+        });
+      }
+
+      if (c.is_live) {
+        playHls(c.hls);
+      } else {
+        destroyHls();
+        video.removeAttribute('src');
+        video.load();
+        offlineOverlay.style.display = 'flex';
+      }
+    }
+
+    function appendChat({ user, text, color }) {
+      const box = document.getElementById('chat-messages');
+      const div = document.createElement('div');
+      div.className = 'chat-msg';
+      div.innerHTML = `<span class="chat-user" style="color:${esc(color || colorFor(user))}">${esc(user)}:</span><span>${esc(text)}</span>`;
+      box.appendChild(div);
+      box.scrollTop = box.scrollHeight;
+    }
+
+    async function loadChannel() {
+      try {
+        const data = await api(`/api/channels/${encodeURIComponent(channelName)}`);
+        renderChannel(data);
+      } catch (err) {
+        document.querySelector('.channel-stage').innerHTML = `
+          <div class="empty">El canal <strong>${esc(channelName)}</strong> no existe.</div>
+        `;
+      }
+    }
+
+    (async () => {
+      const me = await renderTopbar(
+        window.currentUser?.username === channelName ? 'channel' : ''
+      );
+      await renderSidebar();
+      await loadChannel();
+
+      const chatInput = document.getElementById('chat-input');
+      const chatForm = document.getElementById('chat-form');
+      if (!me) {
+        chatInput.disabled = true;
+        chatInput.placeholder = 'Inicia sesión para escribir en el chat';
+      }
+
+      const socket = io();
+      socket.emit('join', channelName);
+
+      socket.on('chat', (msg) => appendChat(msg));
+      socket.on('chat:error', (msg) => toast(msg, true));
+
+      socket.on('viewers', (n) => {
+        const el = document.getElementById('ch-viewers');
+        if (el) el.textContent = n;
+        document.getElementById('chat-viewers').textContent = `${n} espectadores`;
+      });
+
+      socket.on('channel:update', ({ title, category }) => {
+        const t = document.getElementById('ch-title');
+        const c = document.getElementById('ch-cat');
+        if (t) t.textContent = title;
+        if (c) c.textContent = category;
+      });
+
+      socket.on('live', ({ username, live }) => {
+        renderSidebar();
+        if (username === channelName) {
+          if (live) {
+            setTimeout(() => loadChannel(), 2500);
+          } else {
+            loadChannel();
+          }
+        }
+      });
+
+      chatForm.addEventListener('submit', (e) => {
+        e.preventDefault();
+        if (!me) {
+          location.href = '/login.html';
+          return;
+        }
+        const text = chatInput.value.trim();
+        if (!text) return;
+        socket.emit('chat', text);
+        chatInput.value = '';
+      });
+    })();
+  </script>
+</body>
+</html>

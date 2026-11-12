@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Panel del creador — StreamLab</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <header id="topbar" class="topbar"></header>
+
+  <div class="layout">
+    <aside id="sidebar" class="sidebar"></aside>
+
+    <main class="main">
+      <div class="section-header">
+        <h1 class="section-title">Panel del creador</h1>
+      </div>
+
+      <div class="dashboard-grid">
+        <div class="panel-card">
+          <h2>Información del stream</h2>
+
+          <div class="field" style="display:flex;align-items:center;gap:10px">
+            <span class="offline-tag">Estado actual:</span>
+            <span id="live-status"></span>
+          </div>
+
+          <form id="stream-form">
+            <div class="field">
+              <label for="title">Título de la transmisión</label>
+              <input id="title" class="input" type="text" maxlength="100" required>
+            </div>
+
+            <div class="field">
+              <label for="category">Categoría</label>
+              <select id="category"></select>
+            </div>
+
+            <div class="field">
+              <label for="bio">Descripción del canal</label>
+              <textarea id="bio" maxlength="300" placeholder="Cuéntales a tus espectadores sobre tu canal..."></textarea>
+            </div>
+
+            <div style="display:flex;gap:10px;flex-wrap:wrap">
+              <button type="submit" class="btn btn-primary">Guardar</button>
+              <a id="my-channel-link" href="/" class="btn">Ver mi canal</a>
+            </div>
+          </form>
+        </div>
+
+        <div class="panel-card">
+          <h2>Conexión con OBS</h2>
+
+          <div class="field">
+            <label>Servidor RTMP</label>
+            <div class="key-row">
+              <div id="rtmp-url" class="code-box"></div>
+              <button type="button" id="copy-rtmp" class="btn btn-sm">Copiar</button>
+            </div>
+          </div>
+
+          <div class="field">
+            <label>Clave de transmisión (pegar en OBS)</label>
+            <div class="key-row">
+              <div id="obs-key" class="code-box">••••••••••••••••••••</div>
+              <button type="button" id="toggle-key" class="btn btn-sm">Mostrar</button>
+              <button type="button" id="copy-key" class="btn btn-sm btn-primary">Copiar</button>
+            </div>
+          </div>
+
+          <div style="margin-bottom:18px">
+            <button type="button" id="regen-key" class="btn btn-sm btn-danger">
+              Regenerar clave
+            </button>
+          </div>
+
+          <div class="field" style="margin-bottom:0">
+            <label>Recomendaciones de OBS</label>
+            <ul style="padding-left:18px;color:var(--muted);font-size:13px;line-height:1.6">
+              <li>Servicio: <strong>Personalizado...</strong></li>
+              <li>Codificador de video: <strong>x264 / H.264</strong> y audio <strong>AAC</strong> (el servidor hace transmux sin recodificar).</li>
+              <li>Control de frecuencia: <strong>CBR</strong> a 2500 – 4500 kbps (720p o 1080p a 30/60 fps).</li>
+              <li>Intervalo de fotogramas clave (Keyframe Interval): <strong>2 s</strong>.</li>
+            </ul>
+          </div>
+        </div>
+      </div>
+    </main>
+  </div>
+
+  <script src="/common.js"></script>
+  <script>
+    let realObsKey = '';
+    let keyVisible = false;
+
+    function updateKeyDisplay() {
+      const box = document.getElementById('obs-key');
+      const btn = document.getElementById('toggle-key');
+      box.textContent = keyVisible ? realObsKey : '••••••••••••••••••••••••';
+      btn.textContent = keyVisible ? 'Ocultar' : 'Mostrar';
+    }
+
+    async function copyText(text, label) {
+      try {
+        await navigator.clipboard.writeText(text);
+        toast(`${label} copiado al portapapeles`);
+      } catch {
+        toast('No se pudo copiar automáticamente', true);
+      }
+    }
+
+    (async () => {
+      const user = await renderTopbar('dashboard');
+      if (!user) {
+        location.href = '/login.html';
+        return;
+      }
+      await renderSidebar();
+
+      const data = await api('/api/dashboard');
+      document.getElementById('live-status').innerHTML = data.is_live
+        ? '<span class="badge badge-live" style="position:static">EN VIVO</span>'
+        : '<span class="badge badge-offline" style="position:static">OFFLINE</span>';
+
+      document.getElementById('title').value = data.title;
+      document.getElementById('bio').value = data.bio || '';
+      document.getElementById('my-channel-link').href = `/c/${encodeURIComponent(data.username)}`;
+
+      const catSelect = document.getElementById('category');
+      catSelect.innerHTML = data.categories
+        .map(
+          (c) =>
+            `<option value="${esc(c)}" ${c === data.category ? 'selected' : ''}>${esc(c)}</option>`
+        )
+        .join('');
+
+      document.getElementById('rtmp-url').textContent = data.rtmp_url;
+      realObsKey = data.obs_key;
+      updateKeyDisplay();
+
+      document.getElementById('toggle-key').addEventListener('click', () => {
+        keyVisible = !keyVisible;
+        updateKeyDisplay();
+      });
+
+      document.getElementById('copy-rtmp').addEventListener('click', () =>
+        copyText(data.rtmp_url, 'Servidor RTMP')
+      );
+
+      document.getElementById('copy-key').addEventListener('click', () =>
+        copyText(realObsKey, 'Clave de transmisión')
+      );
+
+      document.getElementById('regen-key').addEventListener('click', async () => {
+        if (!confirm('¿Seguro que deseas regenerar tu clave? Deberás actualizarla en OBS.')) {
+          return;
+        }
+        try {
+          const r = await api('/api/dashboard/regenerate-key', { method: 'POST' });
+          realObsKey = r.obs_key;
+          updateKeyDisplay();
+          toast('Clave regenerada correctamente');
+        } catch (err) {
+          toast(err.message, true);
+        }
+      });
+
+      document.getElementById('stream-form').addEventListener('submit', async (e) => {
+        e.preventDefault();
+        try {
+          await api('/api/dashboard', {
+            method: 'PUT',
+            body: {
+              title: document.getElementById('title').value,
+              category: document.getElementById('category').value,
+              bio: document.getElementById('bio').value,
+            },
+          });
+          toast('Información guardada');
+        } catch (err) {
+          toast(err.message, true);
+        }
+      });
+    })();
+  </script>
+</body>
+</html>
